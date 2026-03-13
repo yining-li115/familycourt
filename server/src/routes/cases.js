@@ -505,13 +505,17 @@ router.post(
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const case_ = await db('cases').where({ id: req.params.id }).first();
+      const case_ = await loadCaseWithParties(req.params.id);
       if (!case_) throw httpError(404, '案件不存在');
       if (case_.judge_id !== req.user.sub && !case_.is_ai_judge)
         throw httpError(403, '只有法官可以发出问询');
       if (case_.status !== 'pending_inquiry') throw httpError(400, '案件状态不允许此操作');
 
       const { type, question, target, quoted_text } = req.body;
+
+      // Resolve party user IDs from case_parties
+      const plaintiffIds = case_._plaintiffIds.length > 0 ? case_._plaintiffIds : [case_.plaintiff_id].filter(Boolean);
+      const defendantIds = case_._defendantIds.length > 0 ? case_._defendantIds : [case_.defendant_id].filter(Boolean);
 
       // Check round limits
       const existingCount = await db('inquiries')
@@ -520,78 +524,52 @@ router.post(
         .first();
       const round = Math.floor(Number(existingCount.count) / 2) + 1;
 
-      // Max 3 rounds private + 2 confrontations
+      // Max 2 confrontations
       const confrontationCount = await db('inquiries')
         .where({ case_id: case_.id, type: 'confrontation' })
         .count('id as count')
         .first();
-
-      // Confrontation counts as 2 records (one per side), so divide by 2
-      if (type === 'confrontation' && Number(confrontationCount.count) / 2 >= 2) {
+      const totalParties = plaintiffIds.length + defendantIds.length;
+      if (type === 'confrontation' && Number(confrontationCount.count) / totalParties >= 2) {
         throw httpError(400, '对质最多触发 2 次');
       }
 
       if (type === 'confrontation') {
-        // Create two inquiry records — one for plaintiff, one for defendant
-        const rows = await db('inquiries')
-          .insert([
-            {
-              case_id: case_.id,
-              round,
-              type,
-              question,
-              target: 'plaintiff',
-              quoted_text: quoted_text || null,
-              is_visible_to_both: true,
-            },
-            {
-              case_id: case_.id,
-              round,
-              type,
-              question,
-              target: 'defendant',
-              quoted_text: quoted_text || null,
-              is_visible_to_both: true,
-            },
-          ])
-          .returning('*');
+        // Create one inquiry record per party member (all plaintiffs + all defendants)
+        const insertRows = [
+          ...plaintiffIds.map(uid => ({
+            case_id: case_.id, round, type, question, target: 'plaintiff',
+            target_user_id: uid, quoted_text: quoted_text || null, is_visible_to_both: true,
+          })),
+          ...defendantIds.map(uid => ({
+            case_id: case_.id, round, type, question, target: 'defendant',
+            target_user_id: uid, quoted_text: quoted_text || null, is_visible_to_both: true,
+          })),
+        ];
+        const rows = await db('inquiries').insert(insertRows).returning('*');
 
-        // Notify both parties
         await createNotificationsForUsers(
-          [case_.plaintiff_id, case_.defendant_id].filter(Boolean),
+          [...plaintiffIds, ...defendantIds],
           {
-            caseId: case_.id,
-            type: 'inquiry_received',
-            title: '法官发起对质',
-            body: '法官有问题需要双方分别回答，请进入案件查看。',
+            caseId: case_.id, type: 'inquiry_received',
+            title: '法官发起对质', body: '法官有问题需要双方分别回答，请进入案件查看。',
           }
         );
-
         res.status(201).json(rows);
       } else {
-        const [inquiry] = await db('inquiries')
-          .insert({
-            case_id: case_.id,
-            round,
-            type,
-            question,
-            target,
-            quoted_text: quoted_text || null,
-            is_visible_to_both: false,
-          })
-          .returning('*');
+        // Private inquiry — one record per target-side party member
+        const targetIds = target === 'plaintiff' ? plaintiffIds : defendantIds;
+        const insertRows = targetIds.map(uid => ({
+          case_id: case_.id, round, type, question, target,
+          target_user_id: uid, quoted_text: quoted_text || null, is_visible_to_both: false,
+        }));
+        const rows = await db('inquiries').insert(insertRows).returning('*');
 
-        // Notify the target
-        const targetUserId = target === 'plaintiff' ? case_.plaintiff_id : case_.defendant_id;
-        await createNotification({
-          userId: targetUserId,
-          caseId: case_.id,
-          type: 'inquiry_received',
-          title: '法官有问题需要你回答',
-          body: '请进入案件查看问题并回答。',
+        await createNotificationsForUsers(targetIds, {
+          caseId: case_.id, type: 'inquiry_received',
+          title: '法官有问题需要你回答', body: '请进入案件查看问题并回答。',
         });
-
-        res.status(201).json(inquiry);
+        res.status(201).json(rows.length === 1 ? rows[0] : rows);
       }
     } catch (err) {
       next(err);
@@ -619,10 +597,20 @@ router.patch(
       if (!inquiry) throw httpError(404, '问询记录不存在');
       if (inquiry.answer) throw httpError(400, '已回答过此问题');
 
-      // Validate answerer
-      const isPlaintiff = inquiry.target === 'plaintiff' && case_.plaintiff_id === req.user.sub;
-      const isDefendant = inquiry.target === 'defendant' && case_.defendant_id === req.user.sub;
-      if (!isPlaintiff && !isDefendant) throw httpError(403, '无权回答此问题');
+      // Validate answerer — support multi-party via target_user_id or fallback to role check
+      if (inquiry.target_user_id) {
+        // New style: inquiry has specific target user
+        if (inquiry.target_user_id !== req.user.sub) throw httpError(403, '无权回答此问题');
+      } else {
+        // Legacy: check by role against primary plaintiff/defendant
+        const isPlaintiff = inquiry.target === 'plaintiff' && case_.plaintiff_id === req.user.sub;
+        const isDefendant = inquiry.target === 'defendant' && case_.defendant_id === req.user.sub;
+        // Also check case_parties for multi-party support
+        const parties = await db('case_parties').where({ case_id: case_.id, user_id: req.user.sub });
+        const partyRole = parties.length > 0 ? parties[0].role : null;
+        const isPartyMatch = partyRole === inquiry.target;
+        if (!isPlaintiff && !isDefendant && !isPartyMatch) throw httpError(403, '无权回答此问题');
+      }
 
       const [updated] = await db('inquiries')
         .where({ id: inquiry.id })

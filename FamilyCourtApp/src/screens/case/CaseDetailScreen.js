@@ -299,7 +299,7 @@ export default function CaseDetailScreen({ route, navigation }) {
             {caseData.inquiries.map((inq, idx) => (
               <View key={inq.id} style={[styles.inquiryItem, idx > 0 && { borderTopWidth: 1, borderTopColor: colors.stoneLight, paddingTop: 12, marginTop: 12 }]}>
                 <Text style={styles.inquiryLabel}>
-                  {inq.type === 'confrontation' ? '🔥 对质' : `问询 #${idx + 1}`} → {inq.target === 'plaintiff' ? '原告' : '被告'}
+                  {inq.type === 'confrontation' ? '🔥 对质' : `问询 #${idx + 1}`} → {inq.target_user_id ? memberName(inq.target_user_id) : (inq.target === 'plaintiff' ? '原告' : '被告')}
                 </Text>
                 <Text style={styles.inquiryQuestion}>Q: {inq.question}</Text>
                 {inq.answer ? (
