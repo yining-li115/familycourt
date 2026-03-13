@@ -389,18 +389,25 @@ router.patch('/:id/recuse', requireAuth, async (req, res, next) => {
 
     await cancelAiJobs(case_.id);
 
+    // Judge recuses → AI takes over immediately
     const [updated] = await db('cases')
       .where({ id: case_.id })
-      .update({ judge_id: null, status: 'pending_judge_accept', updated_at: db.fn.now() })
+      .update({
+        judge_id: null,
+        is_ai_judge: true,
+        status: 'pending_defendant',
+        ai_takeover_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      })
       .returning('*');
 
-    // Notify plaintiff to reassign judge
-    await createNotification({
-      userId: case_.plaintiff_id,
+    // Notify all parties
+    const notifyIds = [case_.plaintiff_id, case_.defendant_id].filter(Boolean);
+    await createNotificationsForUsers(notifyIds, {
       caseId: case_.id,
-      type: 'judge_recused',
-      title: '法官申请回避',
-      body: '原指定法官已申请回避，请重新指定法官或等待 AI 接管。',
+      type: 'ai_takeover',
+      title: '法官已回避，AI 法官接管',
+      body: 'AI 法官已接管本案，被告请尽快提交答辩。',
     });
 
     res.json(updated);
