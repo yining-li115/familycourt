@@ -677,15 +677,17 @@ router.patch(
         })
         .returning('*');
 
-      await createNotificationsForUsers(
-        [case_.plaintiff_id, case_.defendant_id].filter(Boolean),
-        {
-          caseId: case_.id,
-          type: 'fact_finding_published',
-          title: '法院认定事实已发布',
-          body: `案件 ${case_.case_number} 的事实认定已发布，请查看。`,
-        }
-      );
+      // Notify all parties (plaintiffs + defendants)
+      const factParties = await db('case_parties').where({ case_id: case_.id });
+      const factUserIds = factParties.length > 0
+        ? factParties.map(p => p.user_id)
+        : [case_.plaintiff_id, case_.defendant_id].filter(Boolean);
+      await createNotificationsForUsers(factUserIds, {
+        caseId: case_.id,
+        type: 'fact_finding_published',
+        title: '法院认定事实已发布',
+        body: `案件 ${case_.case_number} 的事实认定已发布，请查看。`,
+      });
 
       res.json(updated);
     } catch (err) {
@@ -724,13 +726,29 @@ router.patch(
         .returning('*');
 
       const plaintiffAlias = await getMemberAlias(case_.plaintiff_id);
-      await createNotification({
-        userId: case_.defendant_id,
+
+      // Notify all defendants
+      const parties = await db('case_parties').where({ case_id: case_.id, role: 'defendant' });
+      const defendantUserIds = parties.length > 0
+        ? parties.map(p => p.user_id)
+        : [case_.defendant_id].filter(Boolean);
+      await createNotificationsForUsers(defendantUserIds, {
         caseId: case_.id,
         type: 'claim_submitted',
         title: `${plaintiffAlias} 提出了诉求`,
         body: '请查看诉求并表态。',
       });
+
+      // Notify judge
+      if (case_.judge_id) {
+        await createNotification({
+          userId: case_.judge_id,
+          caseId: case_.id,
+          type: 'claim_submitted',
+          title: `${plaintiffAlias} 提出了诉求`,
+          body: `案件 ${case_.case_number} 原告已提出诉求，等待被告表态。`,
+        });
+      }
 
       res.json(updated);
     } catch (err) {
