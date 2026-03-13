@@ -500,6 +500,59 @@ function ActionArea({ case_, role, userId, onRefresh, navigation }) {
     }
   }
 
+  // ── Status hints for all roles when no action is available ─────────────
+  const statusHints = {
+    pending_judge_accept: {
+      plaintiff: '等待法官受理案件…',
+      defendant: '等待法官受理案件…',
+      bystander: '案件等待受理中',
+    },
+    pending_defendant: {
+      judge: '等待被告提交答辩…',
+      plaintiff: '等待被告提交答辩…',
+      bystander: '案件进行中',
+    },
+    pending_inquiry: {
+      plaintiff: '法官正在问询中，请留意通知…',
+      defendant: '法官正在问询中，请留意通知…',
+      bystander: '案件进行中',
+    },
+    pending_fact_finding: {
+      plaintiff: '等待法官发布事实认定…',
+      defendant: '等待法官发布事实认定…',
+      bystander: '案件进行中',
+    },
+    pending_claim: {
+      judge: '事实认定已发布，等待原告提出诉求…',
+      defendant: '等待原告提出诉求…',
+      bystander: '案件进行中',
+    },
+    pending_defendant_response: {
+      judge: '等待被告对诉求表态…',
+      plaintiff: '等待被告对诉求表态…',
+      bystander: '案件进行中',
+    },
+    mediation: {
+      judge: case_.mediation_plan ? '等待双方对调解方案表态…' : undefined,
+      plaintiff: !case_.mediation_plan ? '等待法官提出调解方案…' : undefined,
+      defendant: !case_.mediation_plan ? '等待法官提出调解方案…' : undefined,
+      bystander: '案件调解中',
+    },
+    closed: { _all: '案件已结案' },
+    archived: { _all: '案件已存档，双方未达成一致' },
+    withdrawn: { _all: '案件已撤诉' },
+  };
+
+  const hints = statusHints[case_.status];
+  const hint = hints && (hints[role] || hints._all);
+  if (hint) {
+    return (
+      <View style={styles.actionArea}>
+        <Text style={[styles.actionHint, { textAlign: 'center', marginBottom: 0 }]}>{hint}</Text>
+      </View>
+    );
+  }
+
   return null;
 }
 
