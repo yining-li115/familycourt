@@ -922,31 +922,85 @@ router.patch(
 
       if (pResp && dResp) {
         const bothAccept = pResp === 'accept' && dResp === 'accept';
-        const newStatus = bothAccept ? 'closed' : 'archived';
-        const verdict = bothAccept
-          ? `双方接受调解方案：${case_.mediation_plan}`
-          : null;
 
-        await db('cases').where({ id: case_.id }).update({
-          status: newStatus,
+        if (bothAccept) {
+          // Notify judge to confirm closure — judge decides when to close
+          if (case_.judge_id) {
+            await createNotification({
+              userId: case_.judge_id,
+              caseId: case_.id,
+              type: 'mediation_both_accepted',
+              title: '双方已接受调解方案',
+              body: '双方均接受调解方案，请确认结案。',
+            });
+          }
+        } else {
+          // At least one party rejected — archive
+          await db('cases').where({ id: case_.id }).update({
+            status: 'archived',
+            updated_at: db.fn.now(),
+          });
+
+          const members = await db('users').where({ family_id: case_.family_id });
+          await createNotificationsForUsers(
+            members.map((m) => m.id),
+            {
+              caseId: case_.id,
+              type: 'case_archived',
+              title: `案件 ${case_.case_number} 未达成一致，已存档`,
+              body: '双方未达成一致，案件已存档，完整记录已保留。',
+            }
+          );
+        }
+      }
+
+      res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PATCH /cases/:id/close — 法官确认结案 ────────────────────────────────
+
+router.patch(
+  '/:id/close',
+  requireAuth,
+  [body('verdict').optional().isLength({ max: 2000 })],
+  async (req, res, next) => {
+    try {
+      const case_ = await db('cases').where({ id: req.params.id }).first();
+      if (!case_) throw httpError(404, '案件不存在');
+      if (case_.judge_id !== req.user.sub) throw httpError(403, '只有法官可以确认结案');
+      if (case_.status !== 'mediation') throw httpError(400, '案件状态不允许此操作');
+
+      // Both parties must have accepted mediation
+      if (case_.plaintiff_mediation_response !== 'accept' || case_.defendant_mediation_response !== 'accept') {
+        throw httpError(400, '双方尚未全部接受调解方案');
+      }
+
+      const verdict = req.body.verdict || `双方接受调解方案：${case_.mediation_plan}`;
+
+      const [updated] = await db('cases')
+        .where({ id: case_.id })
+        .update({
+          status: 'closed',
           verdict,
           updated_at: db.fn.now(),
-        });
+        })
+        .returning('*');
 
-        const members = await db('users').where({ family_id: case_.family_id });
-        const type = bothAccept ? 'case_closed' : 'case_archived';
-        const title = bothAccept
-          ? `案件 ${case_.case_number} 已结案 ✅`
-          : `案件 ${case_.case_number} 未达成一致，已存档`;
-        const body = bothAccept
-          ? '双方已接受调解方案，案件已结案。'
-          : '双方未达成一致，案件已存档，完整记录已保留。';
-
-        await createNotificationsForUsers(
-          members.map((m) => m.id),
-          { caseId: case_.id, type, title, body }
-        );
-      }
+      // Notify all family members
+      const members = await db('users').where({ family_id: case_.family_id });
+      await createNotificationsForUsers(
+        members.map((m) => m.id),
+        {
+          caseId: case_.id,
+          type: 'case_closed',
+          title: `案件 ${case_.case_number} 已结案 ✅`,
+          body: '法官已确认结案，案件已结案。',
+        }
+      );
 
       res.json(updated);
     } catch (err) {

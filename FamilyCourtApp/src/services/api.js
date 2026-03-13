@@ -115,6 +115,7 @@ export const casesApi = {
   mediate: (id, mediation_plan) => request('PATCH', `/cases/${id}/mediate`, { mediation_plan }),
   mediationResponse: (id, response) =>
     request('PATCH', `/cases/${id}/mediation-response`, { response }),
+  close: (id, verdict) => request('PATCH', `/cases/${id}/close`, { verdict }),
   withdraw: (id, reason) => request('PATCH', `/cases/${id}/withdraw`, { reason }),
   toggleVisibility: (id) => request('PATCH', `/cases/${id}/visibility`),
 };

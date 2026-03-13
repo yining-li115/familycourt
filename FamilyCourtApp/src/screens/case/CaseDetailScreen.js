@@ -502,6 +502,24 @@ function ActionArea({ case_, role, userId, onRefresh, navigation }) {
     );
   }
 
+  // ── Judge confirms closure when both parties accepted mediation ──────────
+  if (case_.status === 'mediation' && case_.mediation_plan && role === 'judge'
+      && case_.plaintiff_mediation_response === 'accept' && case_.defendant_mediation_response === 'accept') {
+    return (
+      <View style={styles.actionArea}>
+        <Text style={styles.actionTitle}>双方已接受调解方案</Text>
+        <Text style={styles.actionHint}>请确认结案</Text>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          disabled={loading}
+          onPress={() => act(() => casesApi.close(case_.id))}
+        >
+          <Text style={styles.actionBtnText}>✅ 确认结案</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (case_.status === 'mediation' && case_.mediation_plan && (role === 'plaintiff' || role === 'defendant')) {
     const myResp = role === 'plaintiff' ? case_.plaintiff_mediation_response : case_.defendant_mediation_response;
     if (!myResp) {
@@ -551,9 +569,15 @@ function ActionArea({ case_, role, userId, onRefresh, navigation }) {
       bystander: '案件进行中',
     },
     mediation: {
-      judge: case_.mediation_plan ? '等待双方对调解方案表态…' : undefined,
-      plaintiff: !case_.mediation_plan ? '等待法官提出调解方案…' : undefined,
-      defendant: !case_.mediation_plan ? '等待法官提出调解方案…' : undefined,
+      judge: case_.mediation_plan
+        ? (case_.plaintiff_mediation_response === 'accept' && case_.defendant_mediation_response === 'accept'
+          ? undefined  // handled by close button above
+          : '等待双方对调解方案表态…')
+        : undefined,
+      plaintiff: !case_.mediation_plan ? '等待法官提出调解方案…'
+        : case_.plaintiff_mediation_response ? '等待对方表态…' : undefined,
+      defendant: !case_.mediation_plan ? '等待法官提出调解方案…'
+        : case_.defendant_mediation_response ? '等待对方表态…' : undefined,
       bystander: '案件调解中',
     },
     closed: { _all: '案件已结案' },
