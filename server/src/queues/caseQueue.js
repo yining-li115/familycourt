@@ -1,41 +1,51 @@
 'use strict';
 
-const { Queue, Worker } = require('bullmq');
 const redis = require('../utils/redis');
 const db = require('../utils/db');
 const { createNotificationsForUsers } = require('../services/notification');
 
-const QUEUE_NAME = 'case-jobs';
+let caseQueue = null;
 
-const caseQueue = new Queue(QUEUE_NAME, { connection: redis });
+// Only initialize BullMQ if Redis is available
+if (redis) {
+  const { Queue, Worker } = require('bullmq');
 
-// ─── Worker ────────────────────────────────────────────────────────────────
+  const QUEUE_NAME = 'case-jobs';
 
-const worker = new Worker(
-  QUEUE_NAME,
-  async (job) => {
-    const { name, data } = job;
+  caseQueue = new Queue(QUEUE_NAME, { connection: redis });
 
-    if (name === 'ai-warning') {
-      await handleAiWarning(data.caseId);
-    } else if (name === 'ai-takeover') {
-      await handleAiTakeover(data.caseId);
-    } else if (name === 'defendant-deadline-reminder') {
-      await handleDefendantDeadlineReminder(data.caseId);
-    } else if (name === 'ai-auto-inquiry') {
-      await handleAiAutoInquiry(data.caseId);
-    } else if (name === 'ai-fact-finding') {
-      await handleAiFactFinding(data.caseId);
-    } else if (name === 'ai-mediation') {
-      await handleAiMediation(data.caseId);
-    }
-  },
-  { connection: redis }
-);
+  // ─── Worker ──────────────────────────────────────────────────────────────
 
-worker.on('failed', (job, err) => {
-  console.error(`[Queue] job ${job?.name} failed:`, err.message);
-});
+  const worker = new Worker(
+    QUEUE_NAME,
+    async (job) => {
+      const { name, data } = job;
+
+      if (name === 'ai-warning') {
+        await handleAiWarning(data.caseId);
+      } else if (name === 'ai-takeover') {
+        await handleAiTakeover(data.caseId);
+      } else if (name === 'defendant-deadline-reminder') {
+        await handleDefendantDeadlineReminder(data.caseId);
+      } else if (name === 'ai-auto-inquiry') {
+        await handleAiAutoInquiry(data.caseId);
+      } else if (name === 'ai-fact-finding') {
+        await handleAiFactFinding(data.caseId);
+      } else if (name === 'ai-mediation') {
+        await handleAiMediation(data.caseId);
+      }
+    },
+    { connection: redis }
+  );
+
+  worker.on('failed', (job, err) => {
+    console.error(`[Queue] job ${job?.name} failed:`, err.message);
+  });
+
+  console.log('[Queue] BullMQ worker started');
+} else {
+  console.warn('[Queue] Redis not available — background jobs disabled');
+}
 
 // ─── Job handlers ──────────────────────────────────────────────────────────
 
@@ -78,7 +88,6 @@ async function handleAiTakeover(caseId) {
     }
   );
 
-  // Notify defendant to submit defense
   await createNotificationsForUsers([case_.defendant_id], {
     caseId,
     type: 'case_accepted',
@@ -99,7 +108,7 @@ async function handleDefendantDeadlineReminder(caseId) {
   });
 }
 
-// ─── Phase 2: AI auto-inquiry ──────────────────────────────────────────────
+// ─── Phase 2: AI auto-inquiry ────────────────────────────────────────────
 
 async function handleAiAutoInquiry(caseId) {
   const case_ = await db('cases').where({ id: caseId }).first();
@@ -152,7 +161,6 @@ async function handleAiAutoInquiry(caseId) {
     }
   }
 
-  // Notify both parties
   await createNotificationsForUsers(
     [case_.plaintiff_id, case_.defendant_id].filter(Boolean),
     {
@@ -166,7 +174,7 @@ async function handleAiAutoInquiry(caseId) {
   console.info(`[Queue] handleAiAutoInquiry: 案件 ${caseId} 已生成 ${inquiryRows.length} 条 AI 问询`);
 }
 
-// ─── Phase 2: AI fact finding ──────────────────────────────────────────────
+// ─── Phase 2: AI fact finding ────────────────────────────────────────────
 
 async function handleAiFactFinding(caseId) {
   const case_ = await db('cases').where({ id: caseId }).first();
@@ -216,7 +224,7 @@ async function handleAiFactFinding(caseId) {
   console.info(`[Queue] handleAiFactFinding: 案件 ${caseId} 事实认定已生成`);
 }
 
-// ─── Phase 2: AI mediation ─────────────────────────────────────────────────
+// ─── Phase 2: AI mediation ───────────────────────────────────────────────
 
 async function handleAiMediation(caseId) {
   const case_ = await db('cases').where({ id: caseId }).first();
@@ -239,12 +247,10 @@ async function handleAiMediation(caseId) {
     return;
   }
 
-  // Take the first plan as the stored mediation_plan text
   const plans = result.plans || [];
   const firstPlan = plans[0];
   let mediationPlanText;
   if (firstPlan) {
-    // Store all plans as formatted text so parties can see options
     mediationPlanText = plans
       .map((p) => `【${p.title}】\n${p.content}`)
       .join('\n\n');
@@ -278,11 +284,11 @@ async function handleAiMediation(caseId) {
 
 // ─── Schedule helpers ──────────────────────────────────────────────────────
 
-/**
- * Schedule the AI warning (T - 5min) and AI takeover (T) jobs
- * when a new case is created or a judge is assigned.
- */
 async function scheduleAiJobs(caseId, timeoutMins) {
+  if (!caseQueue) {
+    console.warn('[Queue] Redis unavailable, skipping scheduleAiJobs');
+    return;
+  }
   const warningDelay = Math.max(0, (timeoutMins - 5) * 60 * 1000);
   const takeoverDelay = timeoutMins * 60 * 1000;
 
@@ -291,17 +297,18 @@ async function scheduleAiJobs(caseId, timeoutMins) {
 }
 
 async function cancelAiJobs(caseId) {
+  if (!caseQueue) return;
   const warningJob = await caseQueue.getJob(`ai-warning-${caseId}`);
   const takeoverJob = await caseQueue.getJob(`ai-takeover-${caseId}`);
   if (warningJob) await warningJob.remove();
   if (takeoverJob) await takeoverJob.remove();
 }
 
-/**
- * Enqueue AI auto-inquiry generation for an AI-judge case.
- * Called after the defendant submits their defense (status becomes pending_inquiry).
- */
 async function scheduleAiAutoInquiry(caseId) {
+  if (!caseQueue) {
+    console.warn('[Queue] Redis unavailable, skipping scheduleAiAutoInquiry');
+    return;
+  }
   await caseQueue.add(
     'ai-auto-inquiry',
     { caseId },
@@ -309,11 +316,11 @@ async function scheduleAiAutoInquiry(caseId) {
   );
 }
 
-/**
- * Enqueue AI fact-finding for an AI-judge case.
- * Called when all inquiry questions have been answered.
- */
 async function scheduleAiFactFinding(caseId) {
+  if (!caseQueue) {
+    console.warn('[Queue] Redis unavailable, skipping scheduleAiFactFinding');
+    return;
+  }
   await caseQueue.add(
     'ai-fact-finding',
     { caseId },
@@ -321,11 +328,11 @@ async function scheduleAiFactFinding(caseId) {
   );
 }
 
-/**
- * Enqueue AI mediation plan generation for an AI-judge case.
- * Called when the defendant rejects or partially accepts the plaintiff's claim.
- */
 async function scheduleAiMediation(caseId) {
+  if (!caseQueue) {
+    console.warn('[Queue] Redis unavailable, skipping scheduleAiMediation');
+    return;
+  }
   await caseQueue.add(
     'ai-mediation',
     { caseId },

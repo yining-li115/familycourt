@@ -1,8 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = __DEV__
-  ? 'https://8a2f-2a09-80c0-192-0-698d-4025-4527-7a31.ngrok-free.app'
-  : 'https://api.familycourt.app'; // replace with production URL
+const BASE_URL = 'https://familycourt-production.up.railway.app';
 
 async function getAccessToken() {
   return AsyncStorage.getItem('access_token');
@@ -13,20 +11,29 @@ async function request(method, path, body = null, retry = true) {
 
   const headers = {
     'Content-Type': 'application/json',
-    'ngrok-skip-browser-warning': '1',
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (networkErr) {
+    throw new Error('网络连接失败，请检查网络后重试');
+  }
 
   if (res.status === 401 && retry) {
-    // Try refreshing token
     const refreshed = await refreshAccessToken();
     if (refreshed) return request(method, path, body, false);
+  }
+
+  // Guard against non-JSON responses (e.g. HTML error pages)
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`服务器错误 (${res.status})，请稍后重试`);
   }
 
   const data = await res.json();
