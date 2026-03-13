@@ -133,23 +133,38 @@ async function handleAiAutoInquiry(caseId) {
 
   const { questionsForPlaintiff = [], questionsForDefendant = [] } = result;
 
+  // Resolve party user IDs for target_user_id
+  const casePlaintiffIds = [case_.plaintiff_id];
+  const caseDefendantIds = [case_.defendant_id];
+  const caseParties = await db('case_parties').where({ case_id: caseId });
+  for (const p of caseParties) {
+    if (p.role === 'plaintiff' && !casePlaintiffIds.includes(p.user_id)) casePlaintiffIds.push(p.user_id);
+    if (p.role === 'defendant' && !caseDefendantIds.includes(p.user_id)) caseDefendantIds.push(p.user_id);
+  }
+
   const inquiryRows = [
-    ...questionsForPlaintiff.map((q) => ({
-      case_id: caseId,
-      round: 1,
-      type: 'private_plaintiff',
-      question: q,
-      target: 'plaintiff',
-      is_visible_to_both: false,
-    })),
-    ...questionsForDefendant.map((q) => ({
-      case_id: caseId,
-      round: 1,
-      type: 'private_defendant',
-      question: q,
-      target: 'defendant',
-      is_visible_to_both: false,
-    })),
+    ...questionsForPlaintiff.flatMap((q) =>
+      casePlaintiffIds.filter(Boolean).map((uid) => ({
+        case_id: caseId,
+        round: 1,
+        type: 'private_plaintiff',
+        question: q,
+        target: 'plaintiff',
+        target_user_id: uid,
+        is_visible_to_both: false,
+      }))
+    ),
+    ...questionsForDefendant.flatMap((q) =>
+      caseDefendantIds.filter(Boolean).map((uid) => ({
+        case_id: caseId,
+        round: 1,
+        type: 'private_defendant',
+        question: q,
+        target: 'defendant',
+        target_user_id: uid,
+        is_visible_to_both: false,
+      }))
+    ),
   ];
 
   if (inquiryRows.length > 0) {

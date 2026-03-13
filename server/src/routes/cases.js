@@ -816,7 +816,9 @@ router.patch(
 
       const case_ = await db('cases').where({ id: req.params.id }).first();
       if (!case_) throw httpError(404, '案件不存在');
-      if (case_.defendant_id !== req.user.sub) throw httpError(403, '只有被告可以表态');
+      const isDefendant = case_.defendant_id === req.user.sub ||
+        await db('case_parties').where({ case_id: case_.id, user_id: req.user.sub, role: 'defendant' }).first();
+      if (!isDefendant) throw httpError(403, '只有被告可以表态');
       if (case_.status !== 'pending_defendant_response') throw httpError(400, '案件状态不允许此操作');
 
       const { response, reason } = req.body;
@@ -824,25 +826,35 @@ router.patch(
       let verdict = null;
 
       if (response === 'accept') {
-        newStatus = 'closed';
-        verdict = `被告接受了原告的诉求：${case_.plaintiff_claim}`;
+        if (case_.is_ai_judge) {
+          // AI judge: auto-close
+          newStatus = 'closed';
+          verdict = `被告接受了原告的诉求：${case_.plaintiff_claim}`;
+        } else {
+          // Human judge: notify to confirm closure
+          newStatus = 'pending_defendant_response'; // keep status, judge closes
+        }
       } else {
         newStatus = 'mediation';
       }
 
+      const updateFields = {
+        defendant_response: response,
+        defendant_response_reason: reason || null,
+        updated_at: db.fn.now(),
+      };
+      if (newStatus !== 'pending_defendant_response') {
+        updateFields.status = newStatus;
+        updateFields.verdict = verdict;
+      }
+
       const [updated] = await db('cases')
         .where({ id: case_.id })
-        .update({
-          defendant_response: response,
-          defendant_response_reason: reason || null,
-          status: newStatus,
-          verdict,
-          updated_at: db.fn.now(),
-        })
+        .update(updateFields)
         .returning('*');
 
-      if (response === 'accept') {
-        // Case closed
+      if (response === 'accept' && case_.is_ai_judge) {
+        // AI judge auto-closed
         const members = await db('family_members').where({ family_id: case_.family_id });
         await createNotificationsForUsers(
           members.map((m) => m.user_id),
@@ -850,10 +862,19 @@ router.patch(
             caseId: case_.id,
             type: 'case_closed',
             title: `案件 ${case_.case_number} 已结案`,
-            body: '双方已达成一致，案件已结案。',
+            body: '被告接受诉求，AI 法官确认结案。',
           }
         );
-      } else {
+      } else if (response === 'accept' && case_.judge_id) {
+        // Human judge: notify to confirm closure
+        await createNotification({
+          userId: case_.judge_id,
+          caseId: case_.id,
+          type: 'defendant_accepted_claim',
+          title: '被告已接受诉求',
+          body: `案件 ${case_.case_number} 被告接受诉求，请确认结案。`,
+        });
+      } else if (response !== 'accept') {
         // Notify parties mediation starts
         await createNotificationsForUsers(
           [case_.plaintiff_id, case_.defendant_id].filter(Boolean),
@@ -967,8 +988,26 @@ router.patch(
         const bothAccept = pResp === 'accept' && dResp === 'accept';
 
         if (bothAccept) {
-          // Notify judge to confirm closure — judge decides when to close
-          if (case_.judge_id) {
+          if (case_.is_ai_judge) {
+            // AI judge: auto-close since no human judge to confirm
+            const verdict = `双方接受调解方案：${case_.mediation_plan}`;
+            await db('cases').where({ id: case_.id }).update({
+              status: 'closed',
+              verdict,
+              updated_at: db.fn.now(),
+            });
+            const members = await db('family_members').where({ family_id: case_.family_id });
+            await createNotificationsForUsers(
+              members.map((m) => m.user_id),
+              {
+                caseId: case_.id,
+                type: 'case_closed',
+                title: `案件 ${case_.case_number} 已结案`,
+                body: 'AI 法官确认结案，双方已达成一致。',
+              }
+            );
+          } else if (case_.judge_id) {
+            // Human judge: notify to confirm closure
             await createNotification({
               userId: case_.judge_id,
               caseId: case_.id,
@@ -1014,13 +1053,18 @@ router.patch(
     try {
       const case_ = await db('cases').where({ id: req.params.id }).first();
       if (!case_) throw httpError(404, '案件不存在');
-      if (case_.judge_id !== req.user.sub) throw httpError(403, '只有法官可以确认结案');
-      if (case_.status !== 'mediation') throw httpError(400, '案件状态不允许此操作');
-
-      // Both parties must have accepted mediation
-      if (case_.plaintiff_mediation_response !== 'accept' || case_.defendant_mediation_response !== 'accept') {
-        throw httpError(400, '双方尚未全部接受调解方案');
+      // Allow human judge or family admin (for AI judge cases) to close
+      const isJudge = case_.judge_id && case_.judge_id === req.user.sub;
+      const family = await db('families').where({ id: case_.family_id }).first();
+      const isAdmin = family && family.admin_id === req.user.sub;
+      if (!isJudge && !(case_.is_ai_judge && isAdmin)) {
+        throw httpError(403, '只有法官或家庭管理员可以确认结案');
       }
+      // Allow closing from mediation (both accepted) or pending_defendant_response (defendant accepted claim)
+      const canClose =
+        (case_.status === 'mediation' && case_.plaintiff_mediation_response === 'accept' && case_.defendant_mediation_response === 'accept') ||
+        (case_.status === 'pending_defendant_response' && case_.defendant_response === 'accept');
+      if (!canClose) throw httpError(400, '案件状态不允许结案，或双方尚未达成一致');
 
       const verdict = req.body.verdict || `双方接受调解方案：${case_.mediation_plan}`;
 
