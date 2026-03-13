@@ -54,7 +54,10 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.category}>{CATEGORY_LABELS[item.category] || item.category}</Text>
           <Text style={styles.role}>{role}</Text>
         </View>
-        <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString('zh-CN')}</Text>
+        <View style={styles.cardFooter}>
+          <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString('zh-CN')}</Text>
+          {item.family_name && <Text style={styles.familyTag}>{item.family_name}</Text>}
+        </View>
       </TouchableOpacity>
     );
   }
@@ -144,7 +147,14 @@ const styles = StyleSheet.create({
   },
   category: { fontSize: 16, fontWeight: '500', color: colors.black },
   role: { fontSize: 13, color: colors.stone },
-  date: { fontSize: 12, color: colors.stone, marginTop: 8 },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  date: { fontSize: 12, color: colors.stone },
+  familyTag: { fontSize: 12, color: colors.primary, fontWeight: '500' },
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   emptyText: { fontSize: 17, color: colors.black, fontWeight: '500' },

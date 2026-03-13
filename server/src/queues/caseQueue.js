@@ -53,8 +53,8 @@ async function handleAiWarning(caseId) {
   const case_ = await db('cases').where({ id: caseId }).first();
   if (!case_ || case_.status !== 'pending_judge_accept') return;
 
-  const members = await db('users').where({ family_id: case_.family_id });
-  const recipientIds = members.map((m) => m.id);
+  const members = await db('family_members').where({ family_id: case_.family_id });
+  const recipientIds = members.map((m) => m.user_id);
 
   await createNotificationsForUsers(recipientIds, {
     caseId,
@@ -76,10 +76,10 @@ async function handleAiTakeover(caseId) {
     updated_at: db.fn.now(),
   });
 
-  const members = await db('users').where({ family_id: case_.family_id });
+  const members = await db('family_members').where({ family_id: case_.family_id });
 
   await createNotificationsForUsers(
-    members.map((m) => m.id),
+    members.map((m) => m.user_id),
     {
       caseId,
       type: 'ai_takeover',

@@ -29,6 +29,10 @@ export default function CaseDetailScreen({ route, navigation }) {
     plaintiff_emotion: null,
   });
 
+  // Multi-family: family selection for new case
+  const [families, setFamilies] = useState([]);
+  const [selectedFamilyId, setSelectedFamilyId] = useState(null);
+
   // Voice modal for the new-case form
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
 
@@ -38,9 +42,19 @@ export default function CaseDetailScreen({ route, navigation }) {
   useEffect(() => {
     if (caseId) {
       loadCase();
+      // Load members for detail view
+      familiesApi.members().then(setMembers).catch(console.error);
     }
-    // Load members for both new case form and detail view (to show names)
-    familiesApi.members().then(setMembers).catch(console.error);
+    if (isNew) {
+      // Load all families, auto-select if only one
+      familiesApi.list().then((fams) => {
+        setFamilies(fams);
+        if (fams.length === 1) {
+          setSelectedFamilyId(fams[0].id);
+          familiesApi.members(fams[0].id).then(setMembers).catch(console.error);
+        }
+      }).catch(console.error);
+    }
   }, [caseId, isNew]);
 
   function memberName(userId) {
@@ -60,11 +74,20 @@ export default function CaseDetailScreen({ route, navigation }) {
     }
   }
 
+  function handleSelectFamily(familyId) {
+    setSelectedFamilyId(familyId);
+    setMembers([]);
+    setNewCase(prev => ({ ...prev, defendant_ids: [], plaintiff_ids: [], judge_id: '' }));
+    familiesApi.members(familyId).then(setMembers).catch(console.error);
+  }
+
   async function handleFileSuit() {
+    if (!selectedFamilyId) { Alert.alert('提示', '请选择家庭'); return; }
     if (newCase.defendant_ids.length === 0) { Alert.alert('提示', '请选择至少一名被告'); return; }
     if (!newCase.plaintiff_statement.trim()) { Alert.alert('提示', '请填写事实陈述'); return; }
     try {
       await casesApi.create({
+        family_id: selectedFamilyId,
         defendant_ids: newCase.defendant_ids,
         plaintiff_ids: newCase.plaintiff_ids.length > 0 ? newCase.plaintiff_ids : undefined,
         judge_id: newCase.judge_id || null,
@@ -91,6 +114,33 @@ export default function CaseDetailScreen({ route, navigation }) {
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 48 }}>
         <Text style={styles.formTitle}>新起诉</Text>
 
+        {/* Family selector — only show when user has multiple families */}
+        {families.length > 1 && (
+          <>
+            <Text style={styles.label}>选择家庭 *</Text>
+            <View style={styles.multiSelectRow}>
+              {families.map((f) => (
+                <TouchableOpacity
+                  key={f.id}
+                  style={[styles.memberBtn, selectedFamilyId === f.id && styles.memberBtnSelected]}
+                  onPress={() => handleSelectFamily(f.id)}
+                >
+                  <Text style={[styles.memberBtnText, selectedFamilyId === f.id && { color: colors.primary }]}>
+                    {f.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
+        {!selectedFamilyId && families.length > 1 && (
+          <Text style={{ color: colors.stone, textAlign: 'center', marginVertical: 20 }}>
+            请先选择一个家庭
+          </Text>
+        )}
+
+        {selectedFamilyId && (<>
         <Text style={styles.label}>被告 *（可多选）</Text>
         <View style={styles.multiSelectRow}>
           {others.map((m) => {
@@ -207,6 +257,7 @@ export default function CaseDetailScreen({ route, navigation }) {
         <TouchableOpacity style={styles.submitBtn} onPress={handleFileSuit}>
           <Text style={styles.submitBtnText}>提交立案</Text>
         </TouchableOpacity>
+        </>)}
 
         {/* Voice input modal */}
         <VoiceInputModal

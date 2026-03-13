@@ -131,8 +131,15 @@ function filterCaseForRole(case_, role, inquiries = []) {
 
 // ─── GET alias helper ──────────────────────────────────────────────────────
 
-async function getMemberAlias(userId) {
+async function getMemberAlias(userId, familyId) {
   if (!userId) return '未知';
+  if (familyId) {
+    const fm = await db('family_members')
+      .where({ user_id: userId, family_id: familyId })
+      .select('alias')
+      .first();
+    if (fm?.alias) return fm.alias;
+  }
   const u = await db('users').where({ id: userId }).select('nickname', 'family_alias').first();
   return u?.family_alias || u?.nickname || '未知';
 }
@@ -143,6 +150,7 @@ router.post(
   '/',
   requireAuth,
   [
+    body('family_id').optional().isUUID(),
     // Support both single defendant_id and array defendant_ids
     body('defendant_id').optional().isUUID(),
     body('defendant_ids').optional().isArray({ min: 1 }),
@@ -160,7 +168,16 @@ router.post(
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
       const user = await db('users').where({ id: req.user.sub }).first();
-      if (!user.family_id) throw httpError(400, '请先加入家庭');
+
+      // Resolve family_id: from request body, or fall back to user.family_id
+      const familyId = req.body.family_id || user.family_id;
+      if (!familyId) throw httpError(400, '请先加入家庭');
+
+      // Validate user belongs to this family
+      const membership = await db('family_members')
+        .where({ user_id: user.id, family_id: familyId })
+        .first();
+      if (!membership) throw httpError(403, '您不属于该家庭');
 
       const { judge_id, category, plaintiff_statement, plaintiff_emotion } = req.body;
 
@@ -179,10 +196,10 @@ router.post(
       if (defendantIds.includes(user.id)) throw httpError(400, '不能起诉自己');
 
       // Validate all defendants are in same family
-      const defendants = await db('users')
-        .whereIn('id', defendantIds)
-        .where({ family_id: user.family_id });
-      if (defendants.length !== defendantIds.length) throw httpError(400, '部分被告不在您的家庭中');
+      const defendantMembers = await db('family_members')
+        .whereIn('user_id', defendantIds)
+        .where({ family_id: familyId });
+      if (defendantMembers.length !== defendantIds.length) throw httpError(400, '部分被告不在该家庭中');
 
       // Primary defendant (first in list) for backward compatibility
       const primaryDefendantId = defendantIds[0];
@@ -191,25 +208,29 @@ router.post(
       let resolvedJudgeId = judge_id || null;
       let isAiJudge = false;
 
-      const members = await db('users').where({ family_id: user.family_id });
+      const allMembers = await db('family_members')
+        .where({ family_id: familyId })
+        .select('user_id');
+      const memberIds = allMembers.map(m => m.user_id);
       const partyIds = [...allPlaintiffIds, ...defendantIds];
-      const availableJudges = members.filter((m) => !partyIds.includes(m.id));
+      const availableJudgeIds = memberIds.filter((id) => !partyIds.includes(id));
 
-      if (availableJudges.length === 0) {
+      if (availableJudgeIds.length === 0) {
         isAiJudge = true;
         resolvedJudgeId = null;
       } else if (resolvedJudgeId) {
-        const judgeInFamily = availableJudges.find((m) => m.id === resolvedJudgeId);
-        if (!judgeInFamily) throw httpError(400, '指定的法官不在家庭中或为当事人');
+        if (!availableJudgeIds.includes(resolvedJudgeId)) {
+          throw httpError(400, '指定的法官不在家庭中或为当事人');
+        }
       }
 
       const case_number = await generateCaseNumber();
-      const family = await db('families').where({ id: user.family_id }).first();
+      const family = await db('families').where({ id: familyId }).first();
 
       const newCase = await db.transaction(async (trx) => {
         const [c] = await trx('cases')
           .insert({
-            family_id: user.family_id,
+            family_id: familyId,
             case_number,
             status: isAiJudge ? 'pending_defendant' : 'pending_judge_accept',
             category,
@@ -244,7 +265,7 @@ router.post(
       });
 
       // Notifications
-      const plaintiffAlias = await getMemberAlias(user.id);
+      const plaintiffAlias = await getMemberAlias(user.id, familyId);
       if (isAiJudge) {
         await createNotificationsForUsers(defendantIds, {
           caseId: newCase.id,
@@ -277,12 +298,19 @@ router.post(
 
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const user = await db('users').where({ id: req.user.sub }).first();
-    if (!user.family_id) throw httpError(400, '请先加入家庭');
+    // Get all families the user belongs to
+    const memberships = await db('family_members')
+      .where({ user_id: req.user.sub })
+      .select('family_id');
+    const familyIds = memberships.map(m => m.family_id);
+
+    if (familyIds.length === 0) throw httpError(400, '请先加入家庭');
 
     const cases = await db('cases')
-      .where({ family_id: user.family_id })
-      .orderBy('created_at', 'desc');
+      .whereIn('family_id', familyIds)
+      .join('families', 'families.id', 'cases.family_id')
+      .select('cases.*', 'families.name as family_name')
+      .orderBy('cases.created_at', 'desc');
 
     // Load parties for all cases
     const caseIds = cases.map(c => c.id);
@@ -295,9 +323,10 @@ router.get('/', requireAuth, async (req, res, next) => {
       c._plaintiffIds = parties.filter(p => p.role === 'plaintiff').map(p => p.user_id);
       c._defendantIds = parties.filter(p => p.role === 'defendant').map(p => p.user_id);
       c._parties = parties;
-      const result = filterCaseForRole(c, getCaseRole(c, user.id));
+      const result = filterCaseForRole(c, getCaseRole(c, req.user.sub));
       result.plaintiff_ids = c._plaintiffIds;
       result.defendant_ids = c._defendantIds;
+      result.family_name = c.family_name;
       return result;
     });
     res.json(filtered);
@@ -310,17 +339,24 @@ router.get('/', requireAuth, async (req, res, next) => {
 
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
-    const user = await db('users').where({ id: req.user.sub }).first();
     const case_ = await loadCaseWithParties(req.params.id);
     if (!case_) throw httpError(404, '案件不存在');
-    if (case_.family_id !== user.family_id) throw httpError(403, '无权访问');
+
+    // Check user belongs to the case's family
+    const membership = await db('family_members')
+      .where({ user_id: req.user.sub, family_id: case_.family_id })
+      .first();
+    if (!membership) throw httpError(403, '无权访问');
+
+    const family = await db('families').where({ id: case_.family_id }).first();
 
     const inquiries = await db('inquiries').where({ case_id: case_.id }).orderBy('created_at');
-    const role = getCaseRole(case_, user.id);
+    const role = getCaseRole(case_, req.user.sub);
     const result = filterCaseForRole(case_, role, inquiries);
     result.plaintiff_ids = case_._plaintiffIds;
     result.defendant_ids = case_._defendantIds;
     result.parties = case_._parties;
+    result.family_name = family?.name;
     res.json(result);
   } catch (err) {
     next(err);
@@ -807,9 +843,9 @@ router.patch(
 
       if (response === 'accept') {
         // Case closed
-        const members = await db('users').where({ family_id: case_.family_id });
+        const members = await db('family_members').where({ family_id: case_.family_id });
         await createNotificationsForUsers(
-          members.map((m) => m.id),
+          members.map((m) => m.user_id),
           {
             caseId: case_.id,
             type: 'case_closed',
@@ -948,9 +984,9 @@ router.patch(
             updated_at: db.fn.now(),
           });
 
-          const members = await db('users').where({ family_id: case_.family_id });
+          const members = await db('family_members').where({ family_id: case_.family_id });
           await createNotificationsForUsers(
-            members.map((m) => m.id),
+            members.map((m) => m.user_id),
             {
               caseId: case_.id,
               type: 'case_archived',
@@ -998,9 +1034,9 @@ router.patch(
         .returning('*');
 
       // Notify all family members
-      const members = await db('users').where({ family_id: case_.family_id });
+      const members = await db('family_members').where({ family_id: case_.family_id });
       await createNotificationsForUsers(
-        members.map((m) => m.id),
+        members.map((m) => m.user_id),
         {
           caseId: case_.id,
           type: 'case_closed',

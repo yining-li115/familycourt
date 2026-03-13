@@ -4,8 +4,9 @@ import colors from '../../theme/colors';
 import { familiesApi, usersApi } from '../../services/api';
 import { useAuth } from '../../store/authStore';
 
-export default function JoinFamilyScreen({ navigation }) {
+export default function JoinFamilyScreen({ navigation, route }) {
   const { updateUser } = useAuth();
+  const fromProfile = route?.params?.fromProfile;
   const [code, setCode] = useState('');
   const [alias, setAlias] = useState('');
   const [loading, setLoading] = useState(false);
@@ -24,6 +25,9 @@ export default function JoinFamilyScreen({ navigation }) {
       await familiesApi.join(code.trim().toUpperCase(), alias.trim());
       const me = await usersApi.me();
       updateUser(me);
+      if (fromProfile) {
+        Alert.alert('加入成功', '', [{ text: '确定', onPress: () => navigation.goBack() }]);
+      }
     } catch (err) {
       Alert.alert('加入失败', err.message);
     } finally {
@@ -65,7 +69,7 @@ export default function JoinFamilyScreen({ navigation }) {
         <Text style={styles.btnText}>{loading ? '加入中...' : '加入家庭'}</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => navigation.navigate('CreateFamily')} style={styles.link}>
+      <TouchableOpacity onPress={() => navigation.navigate('CreateFamily', { fromProfile })} style={styles.link}>
         <Text style={styles.linkText}>创建新家庭</Text>
       </TouchableOpacity>
     </View>

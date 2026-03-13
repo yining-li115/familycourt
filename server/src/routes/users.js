@@ -25,7 +25,6 @@ router.patch(
   requireAuth,
   [
     body('nickname').optional().isLength({ min: 1, max: 30 }),
-    body('family_alias').optional().isLength({ min: 1, max: 20 }),
     body('status').optional().isIn(['idle', 'busy']),
     body('fcm_token').optional().isString(),
   ],
@@ -34,7 +33,7 @@ router.patch(
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const allowed = ['nickname', 'family_alias', 'avatar_url', 'status', 'fcm_token'];
+      const allowed = ['nickname', 'avatar_url', 'status', 'fcm_token'];
       const updates = {};
       for (const key of allowed) {
         if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -65,6 +64,8 @@ router.delete('/me', requireAuth, async (req, res, next) => {
   try {
     // For v1.0: revoke all tokens. A cron job can clean up after 7 days.
     await db('refresh_tokens').where({ user_id: req.user.sub }).update({ revoked: true });
+    // Remove from all families
+    await db('family_members').where({ user_id: req.user.sub }).del();
     // Detach from family
     await db('users')
       .where({ id: req.user.sub })

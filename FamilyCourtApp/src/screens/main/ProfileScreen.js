@@ -7,30 +7,44 @@ import colors from '../../theme/colors';
 import { familiesApi, usersApi } from '../../services/api';
 import { useAuth } from '../../store/authStore';
 
-const ROLE_PRESETS = ['爸爸', '妈妈', '儿子', '女儿', '爷爷', '奶奶', '姥姥', '姥爷'];
+const ROLE_PRESETS = ['爸爸', '妈妈', '儿子', '女儿', '爷爷', '奶奶', '姥姥', '姥爷',
+  '老公', '老婆', '男朋友', '女朋友', '朋友', '室友'];
 
-export default function ProfileScreen() {
+export default function ProfileScreen({ navigation }) {
   const { user, logout, updateUser } = useAuth();
-  const [family, setFamily] = useState(null);
-  const [members, setMembers] = useState([]);
+  const [families, setFamilies] = useState([]);
+  const [membersByFamily, setMembersByFamily] = useState({});
   const [loading, setLoading] = useState(true);
 
   // Edit states
   const [editingNickname, setEditingNickname] = useState(false);
-  const [editingAlias, setEditingAlias] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
+  const [editingAliasFor, setEditingAliasFor] = useState(null); // familyId
   const [aliasInput, setAliasInput] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (user?.family_id) {
-      Promise.all([familiesApi.me(), familiesApi.members()])
-        .then(([f, m]) => { setFamily(f); setMembers(m); })
-        .finally(() => setLoading(false));
-    } else {
+    loadFamilies();
+  }, []);
+
+  async function loadFamilies() {
+    try {
+      const fams = await familiesApi.list();
+      setFamilies(fams);
+      // Load members for each family in parallel
+      const entries = await Promise.all(
+        fams.map(async (f) => {
+          const members = await familiesApi.members(f.id);
+          return [f.id, members];
+        })
+      );
+      setMembersByFamily(Object.fromEntries(entries));
+    } catch (err) {
+      console.error(err);
+    } finally {
       setLoading(false);
     }
-  }, [user?.family_id]);
+  }
 
   async function saveNickname() {
     const trimmed = nicknameInput.trim();
@@ -50,17 +64,20 @@ export default function ProfileScreen() {
     }
   }
 
-  async function saveAlias(value) {
+  async function saveAlias(familyId, value) {
     const trimmed = (value || aliasInput).trim();
-    if (!trimmed || trimmed === user?.family_alias) {
-      setEditingAlias(false);
+    if (!trimmed) {
+      setEditingAliasFor(null);
       return;
     }
     setSaving(true);
     try {
-      await usersApi.update({ family_alias: trimmed });
-      updateUser({ family_alias: trimmed });
-      setEditingAlias(false);
+      await familiesApi.updateAlias(familyId, trimmed);
+      // Update local state
+      setFamilies((prev) => prev.map((f) =>
+        f.id === familyId ? { ...f, my_alias: trimmed } : f
+      ));
+      setEditingAliasFor(null);
     } catch (err) {
       Alert.alert('保存失败', err.message);
     } finally {
@@ -68,11 +85,9 @@ export default function ProfileScreen() {
     }
   }
 
-  function handleCopyInviteCode() {
-    if (family?.invite_code) {
-      Clipboard.setString(family.invite_code);
-      Alert.alert('已复制', `邀请码 ${family.invite_code} 已复制到剪贴板`);
-    }
+  function handleCopyInviteCode(code) {
+    Clipboard.setString(code);
+    Alert.alert('已复制', `邀请码 ${code} 已复制到剪贴板`);
   }
 
   function handleLogout() {
@@ -126,94 +141,105 @@ export default function ProfileScreen() {
           <Text style={styles.label}>手机号</Text>
           <Text style={styles.value}>{user?.phone}</Text>
         </View>
-
-        {/* Family Alias / Role */}
-        <View style={styles.row}>
-          <Text style={styles.label}>家庭称呼</Text>
-          {editingAlias ? (
-            <View style={styles.editCol}>
-              <View style={styles.editRow}>
-                <TextInput
-                  style={styles.input}
-                  value={aliasInput}
-                  onChangeText={setAliasInput}
-                  maxLength={20}
-                  autoFocus
-                  placeholder="输入称呼，如爸爸"
-                />
-                <TouchableOpacity onPress={() => saveAlias()} disabled={saving} style={styles.saveBtn}>
-                  <Text style={styles.saveBtnText}>{saving ? '...' : '保存'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setEditingAlias(false)} style={styles.cancelBtn}>
-                  <Text style={styles.cancelBtnText}>取消</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.presetRow}>
-                {ROLE_PRESETS.map((role) => (
-                  <TouchableOpacity
-                    key={role}
-                    style={[styles.presetChip, aliasInput === role && styles.presetChipActive]}
-                    onPress={() => { setAliasInput(role); saveAlias(role); }}
-                  >
-                    <Text style={[styles.presetText, aliasInput === role && styles.presetTextActive]}>{role}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={styles.valueRow}
-              onPress={() => { setAliasInput(user?.family_alias || ''); setEditingAlias(true); }}
-            >
-              <Text style={styles.value}>{user?.family_alias || '未设置'}</Text>
-              <Text style={styles.editIcon}>{'>'}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
       </View>
 
-      {/* Family Info */}
-      {family && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>家庭信息</Text>
-          <View style={styles.row}>
-            <Text style={styles.label}>家庭名称</Text>
-            <Text style={styles.value}>{family.name}</Text>
-          </View>
-          <TouchableOpacity style={styles.row} onPress={handleCopyInviteCode}>
-            <Text style={styles.label}>邀请码</Text>
-            <View style={styles.valueRow}>
-              <Text style={[styles.value, styles.code]}>{family.invite_code}</Text>
-              <Text style={styles.copyHint}>点击复制</Text>
-            </View>
-          </TouchableOpacity>
+      {/* Family Cards */}
+      {families.map((fam) => {
+        const members = membersByFamily[fam.id] || [];
+        const isEditingAlias = editingAliasFor === fam.id;
 
-          {/* Members list */}
-          <View style={styles.membersSection}>
-            <Text style={styles.membersTitle}>成员 ({members.length} 人)</Text>
-            {members.map((m) => (
-              <View key={m.id} style={styles.memberRow}>
-                <View style={styles.memberAvatar}>
-                  <Text style={styles.memberAvatarText}>{(m.family_alias || m.nickname || '?')[0]}</Text>
-                </View>
-                <View style={styles.memberInfo}>
-                  <Text style={styles.memberName}>{m.nickname}</Text>
-                  {m.family_alias && <Text style={styles.memberAlias}>{m.family_alias}</Text>}
-                </View>
-                {m.id === family.admin_id && (
-                  <View style={styles.adminBadge}>
-                    <Text style={styles.adminBadgeText}>管理员</Text>
+        return (
+          <View key={fam.id} style={styles.section}>
+            <Text style={styles.sectionTitle}>{fam.name}</Text>
+
+            {/* My alias in this family */}
+            <View style={styles.row}>
+              <Text style={styles.label}>我的称呼</Text>
+              {isEditingAlias ? (
+                <View style={styles.editCol}>
+                  <View style={styles.editRow}>
+                    <TextInput
+                      style={styles.input}
+                      value={aliasInput}
+                      onChangeText={setAliasInput}
+                      maxLength={20}
+                      autoFocus
+                      placeholder="输入称呼"
+                    />
+                    <TouchableOpacity onPress={() => saveAlias(fam.id)} disabled={saving} style={styles.saveBtn}>
+                      <Text style={styles.saveBtnText}>{saving ? '...' : '保存'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setEditingAliasFor(null)} style={styles.cancelBtn}>
+                      <Text style={styles.cancelBtnText}>取消</Text>
+                    </TouchableOpacity>
                   </View>
-                )}
-              </View>
-            ))}
-          </View>
+                  <View style={styles.presetRow}>
+                    {ROLE_PRESETS.map((role) => (
+                      <TouchableOpacity
+                        key={role}
+                        style={[styles.presetChip, aliasInput === role && styles.presetChipActive]}
+                        onPress={() => { setAliasInput(role); saveAlias(fam.id, role); }}
+                      >
+                        <Text style={[styles.presetText, aliasInput === role && styles.presetTextActive]}>{role}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.valueRow}
+                  onPress={() => { setAliasInput(fam.my_alias || ''); setEditingAliasFor(fam.id); }}
+                >
+                  <Text style={styles.value}>{fam.my_alias || '未设置'}</Text>
+                  <Text style={styles.editIcon}>{'>'}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-          {members.length < 3 && (
-            <Text style={styles.warning}>成员不足 3 人，案件将由 AI 担任法官</Text>
-          )}
-        </View>
-      )}
+            {/* Invite code */}
+            <TouchableOpacity style={styles.row} onPress={() => handleCopyInviteCode(fam.invite_code)}>
+              <Text style={styles.label}>邀请码</Text>
+              <View style={styles.valueRow}>
+                <Text style={[styles.value, styles.code]}>{fam.invite_code}</Text>
+                <Text style={styles.copyHint}>点击复制</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Members list */}
+            <View style={styles.membersSection}>
+              <Text style={styles.membersTitle}>成员 ({members.length} 人)</Text>
+              {members.map((m) => (
+                <View key={m.id} style={styles.memberRow}>
+                  <View style={styles.memberAvatar}>
+                    <Text style={styles.memberAvatarText}>{(m.family_alias || m.nickname || '?')[0]}</Text>
+                  </View>
+                  <View style={styles.memberInfo}>
+                    <Text style={styles.memberName}>{m.nickname}</Text>
+                    {m.family_alias && <Text style={styles.memberAlias}>{m.family_alias}</Text>}
+                  </View>
+                  {m.id === fam.admin_id && (
+                    <View style={styles.adminBadge}>
+                      <Text style={styles.adminBadgeText}>管理员</Text>
+                    </View>
+                  )}
+                </View>
+              ))}
+            </View>
+
+            {members.length < 3 && (
+              <Text style={styles.warning}>成员不足 3 人，案件将由 AI 担任法官</Text>
+            )}
+          </View>
+        );
+      })}
+
+      {/* Add family */}
+      <TouchableOpacity
+        style={styles.addFamilyBtn}
+        onPress={() => navigation.navigate('CreateFamily', { fromProfile: true })}
+      >
+        <Text style={styles.addFamilyText}>+ 加入或创建新家庭</Text>
+      </TouchableOpacity>
 
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
         <Text style={styles.logoutText}>退出登录</Text>
@@ -329,6 +355,17 @@ const styles = StyleSheet.create({
   },
   adminBadgeText: { fontSize: 11, color: colors.warm, fontWeight: '500' },
   warning: { fontSize: 13, color: '#C4813A', marginTop: 10, lineHeight: 20 },
+  addFamilyBtn: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.primaryMid,
+    borderStyle: 'dashed',
+  },
+  addFamilyText: { fontSize: 15, color: colors.primary, fontWeight: '500' },
   logoutBtn: {
     borderRadius: 16,
     borderWidth: 1,

@@ -87,13 +87,17 @@ export const usersApi = {
 // ─── Families ──────────────────────────────────────────────────────────────
 
 export const familiesApi = {
-  create: (name) => request('POST', '/families', { name }),
+  create: (name, alias) => request('POST', '/families', { name, alias }),
   join: (invite_code, alias) => request('POST', '/families/join', { invite_code, alias }),
+  list: () => request('GET', '/families'),
   me: () => request('GET', '/families/me'),
-  members: () => request('GET', '/families/me/members'),
-  update: (data) => request('PATCH', '/families/me', data),
-  refreshCode: () => request('POST', '/families/me/refresh-code'),
-  removeMember: (userId) => request('DELETE', `/families/me/members/${userId}`),
+  members: (familyId) => familyId
+    ? request('GET', `/families/${familyId}/members`)
+    : request('GET', '/families/me/members'),
+  update: (familyId, data) => request('PATCH', `/families/${familyId}`, data),
+  refreshCode: (familyId) => request('POST', `/families/${familyId}/refresh-code`),
+  removeMember: (familyId, userId) => request('DELETE', `/families/${familyId}/members/${userId}`),
+  updateAlias: (familyId, alias) => request('PATCH', `/families/${familyId}/alias`, { alias }),
 };
 
 // ─── Cases ─────────────────────────────────────────────────────────────────

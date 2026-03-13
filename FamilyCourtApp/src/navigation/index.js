@@ -179,6 +179,8 @@ export default function AppNavigator() {
                 component={CaseDetailScreen}
                 options={{ headerShown: true, title: '案件详情', headerBackTitle: '返回' }}
               />
+              <Stack.Screen name="CreateFamily" component={CreateFamilyScreen} options={{ title: '创建家庭' }} />
+              <Stack.Screen name="JoinFamily" component={JoinFamilyScreen} options={{ title: '加入家庭' }} />
             </>
           )}
         </Stack.Navigator>
