@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, TextInput,
+  KeyboardAvoidingView, Platform, Keyboard,
 } from 'react-native';
 import colors from '../../theme/colors';
 import { casesApi, familiesApi } from '../../services/api';
@@ -30,6 +31,9 @@ export default function CaseDetailScreen({ route, navigation }) {
 
   // Voice modal for the new-case form
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
+
+  // Scroll ref for keyboard avoidance
+  const scrollRef = useRef(null);
 
   useEffect(() => {
     if (caseId) {
@@ -233,95 +237,110 @@ export default function CaseDetailScreen({ route, navigation }) {
   const statusColor = getStatusColor(caseData.status);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 48 }}>
-      <View style={styles.caseHeader}>
-        <Text style={styles.caseNumber}>{caseData.case_number}</Text>
-        <View style={[styles.badge, { backgroundColor: statusColor + '20', borderColor: statusColor }]}>
-          <Text style={[styles.badgeText, { color: statusColor }]}>{getStatusLabel(caseData.status)}</Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
+      <ScrollView
+        ref={scrollRef}
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: 48 }}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => {
+          // Auto-scroll to bottom when content changes (e.g. keyboard opens on input)
+          scrollRef.current?.scrollToEnd({ animated: true });
+        }}
+      >
+        <View style={styles.caseHeader}>
+          <Text style={styles.caseNumber}>{caseData.case_number}</Text>
+          <View style={[styles.badge, { backgroundColor: statusColor + '20', borderColor: statusColor }]}>
+            <Text style={[styles.badgeText, { color: statusColor }]}>{getStatusLabel(caseData.status)}</Text>
+          </View>
         </View>
-      </View>
 
-      <Text style={styles.category}>{CATEGORY_LABELS[caseData.category] || caseData.category}</Text>
-      {caseData.is_ai_judge && (
-        <View style={styles.aiTag}><Text style={styles.aiTagText}>🤖 AI 法官主持</Text></View>
-      )}
+        <Text style={styles.category}>{CATEGORY_LABELS[caseData.category] || caseData.category}</Text>
+        {caseData.is_ai_judge && (
+          <View style={styles.aiTag}><Text style={styles.aiTagText}>🤖 AI 法官主持</Text></View>
+        )}
 
-      {caseData.plaintiff_statement && (
-        <Section title="原告陈述">
-          <Text style={styles.body}>{caseData.plaintiff_statement}</Text>
-          {caseData.plaintiff_emotion && (
-            <Text style={styles.emotion}>情绪温度：{caseData.plaintiff_emotion}/10</Text>
-          )}
-        </Section>
-      )}
-
-      {/* Show each defendant's statement from case_parties */}
-      {caseData.parties && caseData.parties.filter(p => p.role === 'defendant' && p.statement).length > 0 ? (
-        caseData.parties.filter(p => p.role === 'defendant' && p.statement).map((p, idx) => (
-          <Section key={p.id} title={`被告答辩${caseData.parties.filter(pp => pp.role === 'defendant').length > 1 ? ` (${idx + 1})` : ''}`}>
-            {members.length > 0 && (
-              <Text style={styles.partyName}>{memberName(p.user_id)}</Text>
+        {caseData.plaintiff_statement && (
+          <Section title="原告陈述">
+            <Text style={styles.body}>{caseData.plaintiff_statement}</Text>
+            {caseData.plaintiff_emotion && (
+              <Text style={styles.emotion}>情绪温度：{caseData.plaintiff_emotion}/10</Text>
             )}
-            <Text style={styles.body}>{p.statement}</Text>
-            {p.emotion && <Text style={styles.emotion}>情绪温度：{p.emotion}/10</Text>}
           </Section>
-        ))
-      ) : caseData.defendant_statement ? (
-        <Section title="被告答辩">
-          <Text style={styles.body}>{caseData.defendant_statement}</Text>
-          {caseData.defendant_emotion && (
-            <Text style={styles.emotion}>情绪温度：{caseData.defendant_emotion}/10</Text>
-          )}
-        </Section>
-      ) : null}
+        )}
 
-      {/* Show inquiries */}
-      {caseData.inquiries && caseData.inquiries.length > 0 && (
-        <Section title="问询记录">
-          {caseData.inquiries.map((inq, idx) => (
-            <View key={inq.id} style={[styles.inquiryItem, idx > 0 && { borderTopWidth: 1, borderTopColor: colors.stoneLight, paddingTop: 12, marginTop: 12 }]}>
-              <Text style={styles.inquiryLabel}>
-                {inq.type === 'confrontation' ? '🔥 对质' : `问询 #${idx + 1}`} → {inq.target === 'plaintiff' ? '原告' : '被告'}
-              </Text>
-              <Text style={styles.inquiryQuestion}>Q: {inq.question}</Text>
-              {inq.answer ? (
-                <Text style={styles.inquiryAnswer}>A: {inq.answer}</Text>
-              ) : (
-                <Text style={styles.inquiryPending}>待回答</Text>
+        {/* Show each defendant's statement from case_parties */}
+        {caseData.parties && caseData.parties.filter(p => p.role === 'defendant' && p.statement).length > 0 ? (
+          caseData.parties.filter(p => p.role === 'defendant' && p.statement).map((p, idx) => (
+            <Section key={p.id} title={`被告答辩${caseData.parties.filter(pp => pp.role === 'defendant').length > 1 ? ` (${idx + 1})` : ''}`}>
+              {members.length > 0 && (
+                <Text style={styles.partyName}>{memberName(p.user_id)}</Text>
               )}
-            </View>
-          ))}
-        </Section>
-      )}
+              <Text style={styles.body}>{p.statement}</Text>
+              {p.emotion && <Text style={styles.emotion}>情绪温度：{p.emotion}/10</Text>}
+            </Section>
+          ))
+        ) : caseData.defendant_statement ? (
+          <Section title="被告答辩">
+            <Text style={styles.body}>{caseData.defendant_statement}</Text>
+            {caseData.defendant_emotion && (
+              <Text style={styles.emotion}>情绪温度：{caseData.defendant_emotion}/10</Text>
+            )}
+          </Section>
+        ) : null}
 
-      {caseData.fact_finding && (
-        <Section title={`事实认定${caseData.fact_finding_is_ai ? '  🤖 AI 生成' : ''}`}>
-          <Text style={styles.body}>{caseData.fact_finding}</Text>
-        </Section>
-      )}
+        {/* Show inquiries */}
+        {caseData.inquiries && caseData.inquiries.length > 0 && (
+          <Section title="问询记录">
+            {caseData.inquiries.map((inq, idx) => (
+              <View key={inq.id} style={[styles.inquiryItem, idx > 0 && { borderTopWidth: 1, borderTopColor: colors.stoneLight, paddingTop: 12, marginTop: 12 }]}>
+                <Text style={styles.inquiryLabel}>
+                  {inq.type === 'confrontation' ? '🔥 对质' : `问询 #${idx + 1}`} → {inq.target === 'plaintiff' ? '原告' : '被告'}
+                </Text>
+                <Text style={styles.inquiryQuestion}>Q: {inq.question}</Text>
+                {inq.answer ? (
+                  <Text style={styles.inquiryAnswer}>A: {inq.answer}</Text>
+                ) : (
+                  <Text style={styles.inquiryPending}>待回答</Text>
+                )}
+              </View>
+            ))}
+          </Section>
+        )}
 
-      {caseData.plaintiff_claim && (
-        <Section title="原告诉求">
-          <Text style={styles.tagPill}>{CLAIM_CATEGORY_LABELS[caseData.claim_category]}</Text>
-          <Text style={styles.body}>{caseData.plaintiff_claim}</Text>
-        </Section>
-      )}
+        {caseData.fact_finding && (
+          <Section title={`事实认定${caseData.fact_finding_is_ai ? '  🤖 AI 生成' : ''}`}>
+            <Text style={styles.body}>{caseData.fact_finding}</Text>
+          </Section>
+        )}
 
-      {caseData.mediation_plan && (
-        <Section title={`调解方案${caseData.mediation_plan_is_ai ? '  🤖 AI 生成' : ''}`}>
-          <Text style={styles.body}>{caseData.mediation_plan}</Text>
-        </Section>
-      )}
+        {caseData.plaintiff_claim && (
+          <Section title="原告诉求">
+            <Text style={styles.tagPill}>{CLAIM_CATEGORY_LABELS[caseData.claim_category]}</Text>
+            <Text style={styles.body}>{caseData.plaintiff_claim}</Text>
+          </Section>
+        )}
 
-      {caseData.verdict && (
-        <Section title="结案内容">
-          <Text style={styles.body}>{caseData.verdict}</Text>
-        </Section>
-      )}
+        {caseData.mediation_plan && (
+          <Section title={`调解方案${caseData.mediation_plan_is_ai ? '  🤖 AI 生成' : ''}`}>
+            <Text style={styles.body}>{caseData.mediation_plan}</Text>
+          </Section>
+        )}
 
-      {/* Action area depending on role + status */}
-      <ActionArea case_={caseData} role={role} userId={user.id} onRefresh={loadCase} navigation={navigation} />
-    </ScrollView>
+        {caseData.verdict && (
+          <Section title="结案内容">
+            <Text style={styles.body}>{caseData.verdict}</Text>
+          </Section>
+        )}
+
+        {/* Action area depending on role + status */}
+        <ActionArea case_={caseData} role={role} userId={user.id} onRefresh={loadCase} navigation={navigation} />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -502,11 +521,12 @@ function JudgeInquiryArea({ case_, loading: parentLoading, act }) {
     if (!question.trim()) { Alert.alert('提示', '请输入问题'); return; }
     setLoading(true);
     try {
-      await casesApi.addInquiry(case_.id, {
-        type,
-        question: question.trim(),
-        target,
-      });
+      const payload = { type, question: question.trim() };
+      // Confrontation sends to both parties — no target needed
+      if (type !== 'confrontation') {
+        payload.target = target;
+      }
+      await casesApi.addInquiry(case_.id, payload);
       setQuestion('');
       await act(async () => {}); // refresh
     } catch (err) {
@@ -521,7 +541,7 @@ function JudgeInquiryArea({ case_, loading: parentLoading, act }) {
     await act(() => casesApi.submitFactFinding(case_.id, factFinding.trim()));
   }
 
-  if (showFactFinding || (allAnswered && !case_.fact_finding)) {
+  if (showFactFinding) {
     return (
       <View style={styles.actionArea}>
         <Text style={styles.actionTitle}>事实认定</Text>
@@ -549,14 +569,19 @@ function JudgeInquiryArea({ case_, loading: parentLoading, act }) {
   return (
     <View style={styles.actionArea}>
       <Text style={styles.actionTitle}>法官问询</Text>
-      <Text style={styles.actionHint}>向当事人提问以厘清事实（最多3轮）</Text>
+      {allAnswered && (
+        <Text style={[styles.actionHint, { color: colors.primary, fontWeight: '500' }]}>
+          所有问询已回答完毕，可以继续提问或进入事实认定
+        </Text>
+      )}
+      <Text style={styles.actionHint}>向当事人提问以厘清事实</Text>
 
       {/* Target selection */}
       <View style={styles.inquiryTargetRow}>
         {[
           { key: 'plaintiff', label: '问原告', t: 'private_plaintiff' },
           { key: 'defendant', label: '问被告', t: 'private_defendant' },
-          { key: 'both', label: '对质', t: 'confrontation' },
+          { key: 'both', label: '🔥 对质', t: 'confrontation' },
         ].map(opt => (
           <TouchableOpacity
             key={opt.key}
@@ -569,6 +594,11 @@ function JudgeInquiryArea({ case_, loading: parentLoading, act }) {
           </TouchableOpacity>
         ))}
       </View>
+      {type === 'confrontation' && (
+        <Text style={{ fontSize: 12, color: colors.stone, marginBottom: 8, fontStyle: 'italic' }}>
+          对质问题将同时发送给原告和被告，各自分别回答
+        </Text>
+      )}
 
       <TextInput
         style={styles.textarea}

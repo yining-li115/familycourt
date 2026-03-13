@@ -497,7 +497,7 @@ router.post(
   [
     body('type').isIn(['private_plaintiff', 'private_defendant', 'confrontation']),
     body('question').isLength({ min: 1, max: 1000 }),
-    body('target').isIn(['plaintiff', 'defendant']),
+    body('target').optional().isIn(['plaintiff', 'defendant']),
     body('quoted_text').optional().isLength({ max: 500 }),
   ],
   async (req, res, next) => {
@@ -526,33 +526,73 @@ router.post(
         .count('id as count')
         .first();
 
-      if (type === 'confrontation' && Number(confrontationCount.count) >= 2) {
+      // Confrontation counts as 2 records (one per side), so divide by 2
+      if (type === 'confrontation' && Number(confrontationCount.count) / 2 >= 2) {
         throw httpError(400, '对质最多触发 2 次');
       }
 
-      const [inquiry] = await db('inquiries')
-        .insert({
-          case_id: case_.id,
-          round,
-          type,
-          question,
-          target,
-          quoted_text: quoted_text || null,
-          is_visible_to_both: type === 'confrontation',
-        })
-        .returning('*');
+      if (type === 'confrontation') {
+        // Create two inquiry records — one for plaintiff, one for defendant
+        const rows = await db('inquiries')
+          .insert([
+            {
+              case_id: case_.id,
+              round,
+              type,
+              question,
+              target: 'plaintiff',
+              quoted_text: quoted_text || null,
+              is_visible_to_both: true,
+            },
+            {
+              case_id: case_.id,
+              round,
+              type,
+              question,
+              target: 'defendant',
+              quoted_text: quoted_text || null,
+              is_visible_to_both: true,
+            },
+          ])
+          .returning('*');
 
-      // Notify the target
-      const targetUserId = target === 'plaintiff' ? case_.plaintiff_id : case_.defendant_id;
-      await createNotification({
-        userId: targetUserId,
-        caseId: case_.id,
-        type: 'inquiry_received',
-        title: '法官有问题需要你回答',
-        body: '请进入案件查看问题并回答。',
-      });
+        // Notify both parties
+        await createNotificationsForUsers(
+          [case_.plaintiff_id, case_.defendant_id].filter(Boolean),
+          {
+            caseId: case_.id,
+            type: 'inquiry_received',
+            title: '法官发起对质',
+            body: '法官有问题需要双方分别回答，请进入案件查看。',
+          }
+        );
 
-      res.status(201).json(inquiry);
+        res.status(201).json(rows);
+      } else {
+        const [inquiry] = await db('inquiries')
+          .insert({
+            case_id: case_.id,
+            round,
+            type,
+            question,
+            target,
+            quoted_text: quoted_text || null,
+            is_visible_to_both: false,
+          })
+          .returning('*');
+
+        // Notify the target
+        const targetUserId = target === 'plaintiff' ? case_.plaintiff_id : case_.defendant_id;
+        await createNotification({
+          userId: targetUserId,
+          caseId: case_.id,
+          type: 'inquiry_received',
+          title: '法官有问题需要你回答',
+          body: '请进入案件查看问题并回答。',
+        });
+
+        res.status(201).json(inquiry);
+      }
     } catch (err) {
       next(err);
     }
