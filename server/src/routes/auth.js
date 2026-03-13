@@ -36,7 +36,9 @@ router.post(
         }
       }
 
-      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const code = (process.env.SMS_PROVIDER === 'mock')
+        ? '123456'
+        : String(Math.floor(100000 + Math.random() * 900000));
       await redis.set(
         `verify:${phone}`,
         JSON.stringify({ code, attempts: 0, sentAt: Date.now() }),
