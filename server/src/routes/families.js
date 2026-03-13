@@ -146,14 +146,16 @@ router.get('/me', requireAuth, async (req, res, next) => {
   }
 });
 
-// ─── GET /families/:familyId/members ──────────────────────────────────────
+// ─── GET /families/me/members — 兼容旧接口 ───────────────────────────────
+// IMPORTANT: must be before /:familyId/members to avoid "me" matching as familyId
 
-router.get('/:familyId/members', requireAuth, async (req, res, next) => {
+router.get('/me/members', requireAuth, async (req, res, next) => {
   try {
-    await requireMembership(req.user.sub, req.params.familyId);
+    const user = await db('users').where({ id: req.user.sub }).first();
+    if (!user.family_id) throw httpError(404, '您还未加入任何家庭');
 
     const members = await db('family_members')
-      .where({ family_id: req.params.familyId })
+      .where({ family_id: user.family_id })
       .join('users', 'users.id', 'family_members.user_id')
       .select(
         'users.id',
@@ -169,15 +171,14 @@ router.get('/:familyId/members', requireAuth, async (req, res, next) => {
   }
 });
 
-// ─── GET /families/me/members — 兼容旧接口 ───────────────────────────────
+// ─── GET /families/:familyId/members ──────────────────────────────────────
 
-router.get('/me/members', requireAuth, async (req, res, next) => {
+router.get('/:familyId/members', requireAuth, async (req, res, next) => {
   try {
-    const user = await db('users').where({ id: req.user.sub }).first();
-    if (!user.family_id) throw httpError(404, '您还未加入任何家庭');
+    await requireMembership(req.user.sub, req.params.familyId);
 
     const members = await db('family_members')
-      .where({ family_id: user.family_id })
+      .where({ family_id: req.params.familyId })
       .join('users', 'users.id', 'family_members.user_id')
       .select(
         'users.id',
