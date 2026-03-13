@@ -155,7 +155,7 @@ router.get('/me/members', requireAuth, async (req, res, next) => {
     if (!user.family_id) throw httpError(404, '您还未加入任何家庭');
 
     const members = await db('family_members')
-      .where({ family_id: user.family_id })
+      .where('family_members.family_id', user.family_id)
       .join('users', 'users.id', 'family_members.user_id')
       .select(
         'users.id',
@@ -178,7 +178,7 @@ router.get('/:familyId/members', requireAuth, async (req, res, next) => {
     await requireMembership(req.user.sub, req.params.familyId);
 
     const members = await db('family_members')
-      .where({ family_id: req.params.familyId })
+      .where('family_members.family_id', req.params.familyId)
       .join('users', 'users.id', 'family_members.user_id')
       .select(
         'users.id',
