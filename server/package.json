@@ -4,7 +4,7 @@
   "description": "Family Court backend API",
   "main": "src/app.js",
   "scripts": {
-    "start": "node src/app.js",
+    "start": "knex migrate:latest && node src/app.js",
     "dev": "nodemon src/app.js",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
