@@ -325,6 +325,24 @@ export default function CaseDetailScreen({ route, navigation }) {
           </Section>
         )}
 
+        {caseData.defendant_response && (
+          <Section title="被告表态">
+            <Text style={[styles.tagPill, {
+              backgroundColor: caseData.defendant_response === 'accept' ? colors.primaryLight
+                : caseData.defendant_response === 'partial' ? '#FFF3E0'
+                : '#FFEBEE',
+              color: caseData.defendant_response === 'accept' ? colors.primary
+                : caseData.defendant_response === 'partial' ? '#E65100'
+                : '#C62828',
+            }]}>
+              {{ accept: '完全接受', partial: '部分接受', reject: '不接受' }[caseData.defendant_response]}
+            </Text>
+            {caseData.defendant_response_reason ? (
+              <Text style={styles.body}>{caseData.defendant_response_reason}</Text>
+            ) : null}
+          </Section>
+        )}
+
         {caseData.mediation_plan && (
           <Section title={`调解方案${caseData.mediation_plan_is_ai ? '  🤖 AI 生成' : ''}`}>
             <Text style={styles.body}>{caseData.mediation_plan}</Text>
